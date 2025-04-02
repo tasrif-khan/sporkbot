@@ -25,8 +25,12 @@ def setup_logging():
 
 class SporkMP3(commands.Bot):
     def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
+        # Set up minimal intents
+        intents = discord.Intents.none()
+        intents.guilds = True  # Needed for basic guild operations
+        intents.voice_states = True  # Needed for voice functionality
+        intents.guild_messages = True  # Needed for message handling
+        
         super().__init__(command_prefix="!", intents=intents)
         
         # Load config

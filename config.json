@@ -1,15 +1,15 @@
 {
-    "token": "bot token here",
+    "token": "fake token",
     "default_volume": 100,
     "temp_folder": "./temp",
-    "max_queue_size_mb": 180,
+    "max_queue_size_mb": 200,
     "max_guilds_per_shard": 40,
     "shard_count": 3,
     "resource_limits": {
         "max_tracks_per_guild": 25,
         "max_track_duration_minutes": 180,
         "rate_limit_seconds": 2,
-        "cleanup_interval_minutes": 5,
-        "inactive_timeout_minutes": 30
+        "cleanup_interval_minutes": 30,
+        "inactive_timeout_minutes": 120
     }
 }
