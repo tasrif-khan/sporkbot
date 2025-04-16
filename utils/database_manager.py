@@ -22,6 +22,31 @@ class DatabaseManager:
                     )
                 ''')
                 
+                # Check if columns exist, add them if they don't
+                cursor.execute("PRAGMA table_info(guild_settings)")
+                columns = [column[1] for column in cursor.fetchall()]
+                
+                if 'playback_speed' not in columns:
+                    cursor.execute('''
+                        ALTER TABLE guild_settings
+                        ADD COLUMN playback_speed INTEGER DEFAULT 100
+                    ''')
+                    logging.info("Added playback_speed column to guild_settings table")
+                
+                if 'upload_count' not in columns:
+                    cursor.execute('''
+                        ALTER TABLE guild_settings
+                        ADD COLUMN upload_count INTEGER DEFAULT 0
+                    ''')
+                    logging.info("Added upload_count column to guild_settings table")
+                
+                if 'last_rating_request' not in columns:
+                    cursor.execute('''
+                        ALTER TABLE guild_settings
+                        ADD COLUMN last_rating_request INTEGER DEFAULT 0
+                    ''')
+                    logging.info("Added last_rating_request column to guild_settings table")
+                
                 # Create blacklisted users table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS blacklisted_users (
@@ -76,6 +101,113 @@ class DatabaseManager:
         except Exception as e:
             logging.error(f"Error setting autoplay: {e}")
             raise
+
+    # Playback Speed settings
+    def get_playback_speed(self, guild_id: int) -> int:
+        """Get playback speed setting for a guild (percentage: 100 = normal speed)"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT playback_speed FROM guild_settings WHERE guild_id = ?",
+                    (guild_id,)
+                )
+                result = cursor.fetchone()
+                return result[0] if result and result[0] is not None else 100  # Default to 100% if not set
+        except Exception as e:
+            logging.error(f"Error getting playback speed setting: {e}")
+            return 100
+
+    def set_playback_speed(self, guild_id: int, speed: int):
+        """Set playback speed setting for a guild (percentage: 100 = normal speed)"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO guild_settings (guild_id, playback_speed)
+                    VALUES (?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET playback_speed = ?
+                ''', (guild_id, speed, speed))
+                conn.commit()
+        except Exception as e:
+            logging.error(f"Error setting playback speed: {e}")
+            raise
+    
+    # Upload count and rating request tracking
+    def get_upload_count(self, guild_id: int) -> int:
+        """Get upload count for a guild"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT upload_count FROM guild_settings WHERE guild_id = ?",
+                    (guild_id,)
+                )
+                result = cursor.fetchone()
+                return result[0] if result and result[0] is not None else 0
+        except Exception as e:
+            logging.error(f"Error getting upload count: {e}")
+            return 0
+
+    def increment_upload_count(self, guild_id: int, amount: int = 1):
+        """Increment upload count for a guild"""
+        try:
+            current_count = self.get_upload_count(guild_id)
+            new_count = current_count + amount
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO guild_settings (guild_id, upload_count)
+                    VALUES (?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET upload_count = ?
+                ''', (guild_id, new_count, new_count))
+                conn.commit()
+        except Exception as e:
+            logging.error(f"Error incrementing upload count: {e}")
+
+    def reset_upload_count(self, guild_id: int):
+        """Reset upload count for a guild"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO guild_settings (guild_id, upload_count)
+                    VALUES (?, 0)
+                    ON CONFLICT(guild_id) DO UPDATE SET upload_count = 0
+                ''', (guild_id,))
+                conn.commit()
+        except Exception as e:
+            logging.error(f"Error resetting upload count: {e}")
+
+    def get_last_rating_request(self, guild_id: int) -> int:
+        """Get timestamp of last rating request for a guild"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT last_rating_request FROM guild_settings WHERE guild_id = ?",
+                    (guild_id,)
+                )
+                result = cursor.fetchone()
+                return result[0] if result and result[0] is not None else 0
+        except Exception as e:
+            logging.error(f"Error getting last rating request timestamp: {e}")
+            return 0
+
+    def update_last_rating_request(self, guild_id: int, timestamp: int):
+        """Update timestamp of last rating request for a guild"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO guild_settings (guild_id, last_rating_request)
+                    VALUES (?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET last_rating_request = ?
+                ''', (guild_id, timestamp, timestamp))
+                conn.commit()
+        except Exception as e:
+            logging.error(f"Error updating last rating request timestamp: {e}")
 
     # Blacklist management
     def add_to_blacklist(self, guild_id: int, user_id: int):
