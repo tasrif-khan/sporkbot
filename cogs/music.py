@@ -176,6 +176,12 @@ class Music(commands.Cog):
         await self.update_last_channel(interaction)
         await self.music_commands.volume(interaction, volume)
     
+    @app_commands.command(name="speed", description="Set the playback speed (50-200%)")
+    @check_permissions()
+    async def speed(self, interaction: discord.Interaction, speed: int):
+        await self.update_last_channel(interaction)
+        await self.music_commands.speed(interaction, speed)
+    
     @app_commands.command(name="forward", description="Skip forward by specified seconds")
     @check_permissions()
     async def forward(self, interaction: discord.Interaction, seconds: int):

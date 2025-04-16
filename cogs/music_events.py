@@ -303,6 +303,40 @@ class MusicEvents:
                     
                     await message.channel.send("\n".join(status_message))
 
+                # Increment upload count and check if we should ask for a rating
+                if added_tracks:
+                    # Get current values from database
+                    current_count = self.db.get_upload_count(message.guild.id)
+                    last_request = self.db.get_last_rating_request(message.guild.id)
+                    
+                    # Increment the counter
+                    new_count = current_count + len(added_tracks)
+                    self.db.increment_upload_count(message.guild.id, len(added_tracks))
+                    
+                    current_time = int(time.time())
+                    
+                    # Only ask for rating if:
+                    # 1. They've uploaded at least 10 files
+                    # 2. We haven't asked in the last 7 days (604800 seconds)
+                    if (new_count >= 10 and 
+                            (current_time - last_request > 604800)):
+                        
+                        # Reset the counter and update last request time
+                        self.db.reset_upload_count(message.guild.id)
+                        self.db.update_last_rating_request(message.guild.id, current_time)
+                        
+                        if can_embed:
+                            rating_embed = self.music_ui.create_embed(
+                                f"{self.music_ui.emoji['success']} Enjoying SporkMP3?",
+                                "If you're enjoying the bot, please consider rating us on top.gg!\n"
+                                "Your support helps more people discover the bot.\n\n"
+                                "[Rate SporkMP3 on top.gg](https://top.gg/bot/1318106283760680970)",
+                                discord.Color.gold()
+                            )
+                            await message.channel.send(embed=rating_embed)
+                        else:
+                            await message.channel.send("Enjoying SporkMP3? Please consider rating us: https://top.gg/bot/1318106283760680970")
+
                 # Connect to voice channel if not already connected
                 if not message.guild.voice_client and added_tracks:
                     try:
