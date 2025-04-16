@@ -120,6 +120,41 @@ class MusicCommands:
             )
             await interaction.response.send_message(embed=embed)
     
+    async def speed(self, interaction, speed):
+        """Set playback speed"""
+        if speed < 50 or speed > 200:
+            embed = self.music_ui.create_embed(
+                f"{self.music_ui.emoji['warning']} Invalid Speed",
+                "Speed must be between 50% and 200%!",
+                discord.Color.yellow()
+            )
+            await interaction.response.send_message(embed=embed)
+            return
+
+        try:
+            # Store the new speed in the database
+            self.db.set_playback_speed(interaction.guild_id, speed)
+            
+            speed_emoji = "🐌" if speed < 100 else "🚀" if speed > 100 else "⏱️"
+            
+            # No song playing, just update the setting
+            embed = self.music_ui.create_embed(
+                f"{speed_emoji} Playback Speed Changed",
+                f"Set speed to **{speed}%**\n"
+                f"**Note:** This setting will apply to all future tracks.",
+                discord.Color.blue()
+            )
+                
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            logging.error(f"Error setting playback speed: {e}")
+            embed = self.music_ui.create_embed(
+                f"{self.music_ui.emoji['error']} Speed Error",
+                "Failed to set playback speed!",
+                discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed)
+    
     async def play(self, interaction):
         # Defer response immediately
         await interaction.response.defer()
@@ -186,6 +221,10 @@ class MusicCommands:
                         guild_state.current_track.duration
                     )
                     
+                    # Get speed setting
+                    speed = self.db.get_playback_speed(interaction.guild_id)
+                    speed_emoji = "🐌" if speed < 100 else "🚀" if speed > 100 else "⏱️"
+                    
                     # Create success embed with detailed information
                     embed = self.music_ui.create_embed(
                         f"{self.music_ui.emoji['play']} Now Playing",
@@ -193,6 +232,7 @@ class MusicCommands:
                         f"{self.music_ui.emoji['microphone']} **Requested by:** {guild_state.current_track.requester}\n"
                         f"{self.music_ui.emoji['time']} **Duration:** {self.music_ui.format_duration(int(guild_state.current_track.duration))}\n"
                         f"🎚️ **Bitrate:** {guild_state.current_track.bitrate}kbps\n"
+                        f"{speed_emoji} **Speed:** {speed}%\n"
                         f"**Progress:** {progress_bar}",
                         discord.Color.green()
                     )
@@ -376,12 +416,17 @@ class MusicCommands:
                 guild_state.current_track.duration
             )
             
+            # Get speed setting
+            speed = self.db.get_playback_speed(interaction.guild_id)
+            speed_emoji = "🐌" if speed < 100 else "🚀" if speed > 100 else "⏱️"
+            
             embed = self.music_ui.create_embed(
                 f"{self.music_ui.emoji['play']} Now Playing",
                 f"{self.music_ui.emoji['music']} **Track:** {guild_state.current_track.filename}\n"
                 f"{self.music_ui.emoji['microphone']} **Requested by:** {guild_state.current_track.requester}\n"
                 f"{self.music_ui.emoji['time']} **Time:** `{current_position_str} / {total_duration}`\n"
                 f"🎚️ **Bitrate:** {guild_state.current_track.bitrate}kbps\n"
+                f"{speed_emoji} **Speed:** {speed}%\n"
                 f"**Progress:** {progress_bar}",
                 discord.Color.green()
             )
@@ -478,7 +523,14 @@ class MusicCommands:
             
             await asyncio.sleep(0.5)
             
-            audio_source = self.music_playback.get_pcm_audio(guild_state.current_track, new_position)
+            # Get speed setting
+            speed = self.db.get_playback_speed(interaction.guild_id)
+            
+            audio_source = self.music_playback.get_pcm_audio(
+                guild_state.current_track, 
+                new_position,
+                speed
+            )
             
             def after_seeking(error):
                 guild_state.is_seeking = False
@@ -559,7 +611,14 @@ class MusicCommands:
             
             await asyncio.sleep(0.5)
             
-            audio_source = self.music_playback.get_pcm_audio(guild_state.current_track, new_position)
+            # Get speed setting
+            speed = self.db.get_playback_speed(interaction.guild_id)
+            
+            audio_source = self.music_playback.get_pcm_audio(
+                guild_state.current_track, 
+                new_position,
+                speed
+            )
             
             def after_seeking(error):
                 guild_state.is_seeking = False
@@ -648,7 +707,14 @@ class MusicCommands:
             
             await asyncio.sleep(0.5)
             
-            audio_source = self.music_playback.get_pcm_audio(guild_state.current_track, guild_state.current_track.position)
+            # Get speed setting
+            speed = self.db.get_playback_speed(interaction.guild_id)
+            
+            audio_source = self.music_playback.get_pcm_audio(
+                guild_state.current_track, 
+                guild_state.current_track.position,
+                speed
+            )
             
             def after_seeking(error):
                 guild_state.is_seeking = False
@@ -939,6 +1005,7 @@ class MusicCommands:
             f"{self.music_ui.emoji['stop']} **/clear** - Clear the queue",
             f"{self.music_ui.emoji['queue']} **/remove <position>** - Remove a specific song from the queue",
             f"{self.music_ui.emoji['volume']} **/volume <0-120>** - Set the volume",
+            f"{self.music_ui.emoji['time']} **/speed <50-200>** - Set playback speed percentage",
             f"{self.music_ui.emoji['skip']} **/skip** - Skip the current song",
             f"{self.music_ui.emoji['loop']} **/loop <times>** - Toggle loop mode (optional: specify number of loops)",
             f"{self.music_ui.emoji['time']} **/forward <seconds>** - Skip forward by specified seconds",

@@ -17,8 +17,17 @@ class MusicPlayback:
         self.music_ui = music_ui  # Added music_ui for creating embeds
         self.ffmpeg_path = ffmpeg_path
     
-    def get_pcm_audio(self, track, start_time=0):
-        """Get PCM audio source for playback with variable bitrate"""
+    def get_pcm_audio(self, track, start_time=0, speed=None):
+        """Get PCM audio source for playback with variable bitrate and speed"""
+        if track is None:
+            logging.error("Cannot create audio source: track is None")
+            raise ValueError("Track is None")
+            
+        # Check if track has necessary attributes
+        if not hasattr(track, 'last_accessed'):
+            logging.error("Track missing required 'last_accessed' attribute")
+            raise ValueError("Track missing required attributes")
+            
         track.last_accessed = time.time()
         
         # Ensure start_time is within valid range
@@ -32,7 +41,7 @@ class MusicPlayback:
         # Default to 192k but use higher for high-quality sources
         if hasattr(track, 'bitrate') and track.bitrate:
             original_bitrate = track.bitrate
-            track.bitrate = max(192, min(320, track.bitrate))  # Clamp between 192-320
+            track.bitrate = min(320, track.bitrate)  # Clamp between 1-320
             if original_bitrate != track.bitrate:
                 logging.info(f"Adjusted bitrate from {original_bitrate}kbps to {track.bitrate}kbps")
         elif track.downloaded_path.lower().endswith(('.flac', '.wav')):
@@ -41,23 +50,52 @@ class MusicPlayback:
             track.bitrate = 192  # Default bitrate for most formats
         
         try:
+            # If no speed provided, get from the database
+            if speed is None:
+                guild_id = None
+                for guild in self.bot.guilds:
+                    for vc in guild.voice_channels:
+                        if guild.voice_client and guild.voice_client.channel == vc:
+                            guild_id = guild.id
+                            break
+                if guild_id:
+                    speed = self.db.get_playback_speed(guild_id)
+                else:
+                    speed = 100  # Default to normal speed
+            
+            # Apply speed filter if not 100%
+            speed_filter = ""
+            if speed != 100:
+                speed_value = speed / 100.0
+                # Use atempo filter for speed adjustment (with multi-stage for large changes)
+                if speed_value > 2.0:
+                    # FFmpeg atempo filter is limited to 0.5-2.0 range, so we chain filters
+                    speed_filter = f"-filter:a \"atempo=2.0,atempo={speed_value/2.0}\""
+                elif speed_value < 0.5:
+                    # Similarly for very slow speeds
+                    speed_filter = f"-filter:a \"atempo=0.5,atempo={speed_value/0.5}\""
+                else:
+                    speed_filter = f"-filter:a \"atempo={speed_value}\""
+            
             # Handle various file formats including MP4
+            ffmpeg_options = f'-vn -b:a {track.bitrate}k {speed_filter}'
+            
             if track.downloaded_path.lower().endswith('.mp4'):
                 audio_source = discord.FFmpegPCMAudio(
                     track.downloaded_path,
                     before_options=options,
                     executable=self.ffmpeg_path,
-                    options=f'-vn -b:a {track.bitrate}k'  # Extract audio and set bitrate
+                    options=ffmpeg_options.strip()  # Extract audio and set bitrate
                 )
             else:
                 audio_source = discord.FFmpegPCMAudio(
                     track.downloaded_path,
                     before_options=options,
                     executable=self.ffmpeg_path,
-                    options=f'-vn -b:a {track.bitrate}k'  # Set bitrate for audio
+                    options=ffmpeg_options.strip()  # Set bitrate for audio
                 )
             
-            logging.info(f"Created audio source with bitrate: {track.bitrate}k")
+            logging.info(f"Created audio source with bitrate: {track.bitrate}k and speed: {speed}%")
             
             # Start tracking playback position
             track.start_playback(start_time)
@@ -89,6 +127,10 @@ class MusicPlayback:
                 guild_state.current_track.duration
             )
             
+            # Get the current speed setting
+            speed = self.db.get_playback_speed(guild.id)
+            speed_emoji = "🐌" if speed < 100 else "🚀" if speed > 100 else "⏱️"
+            
             # Create the embed
             embed = self.music_ui.create_embed(
                 f"{self.music_ui.emoji['play']} Now Playing",
@@ -96,6 +138,7 @@ class MusicPlayback:
                 f"{self.music_ui.emoji['microphone']} **Requested by:** {guild_state.current_track.requester}\n"
                 f"{self.music_ui.emoji['time']} **Duration:** {self.music_ui.format_duration(int(guild_state.current_track.duration))}\n"
                 f"🎚️ **Bitrate:** {guild_state.current_track.bitrate}kbps\n"
+                f"{speed_emoji} **Speed:** {speed}%\n"
                 f"**Progress:** {progress_bar}",
                 discord.Color.green()
             )
@@ -200,9 +243,13 @@ class MusicPlayback:
 
             # Create and configure audio source
             try:
+                # Get the speed setting for this guild
+                speed = self.db.get_playback_speed(guild.id)
+                
                 audio_source = self.get_pcm_audio(
                     guild_state.current_track, 
-                    guild_state.current_track.position
+                    guild_state.current_track.position,
+                    speed
                 )
                 
                 # Set volume from guild state
