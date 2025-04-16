@@ -55,9 +55,13 @@ class SporkMP3(commands.Bot):
     async def on_ready(self):
         logging.info(f'{self.user} is ready!')
         logging.info(f'Serving in {len(self.guilds)} servers')
-
-    async def on_error(self, event_method: str, *args, **kwargs):
-        logging.error(f'Error in {event_method}: ', exc_info=True)
+        
+        # Set the bot's activity status
+        activity = discord.Game(name="your audio files")
+        await self.change_presence(activity=activity)
+        logging.info("Set activity status to 'Playing your audio files'")
+        async def on_error(self, event_method: str, *args, **kwargs):
+            logging.error(f'Error in {event_method}: ', exc_info=True)
 
     async def on_command_error(self, ctx, error):
         if isinstance(error, commands.CommandNotFound):
