@@ -1912,7 +1912,10 @@ class QueueView(discord.ui.View):
         await self.music_cog._play_next(self.guild, force=True, advance=False)
         self.state.manual_queue_seek = False
         self._rebuild()
-        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        try:
+            await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        except discord.NotFound:
+            pass  # NP message was deleted and re-sent by _send_now_playing; nothing to update here
 
     async def _prev(self, interaction: discord.Interaction):
         self.page = max(0, self.page - 1)
