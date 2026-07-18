@@ -562,11 +562,12 @@ class LibrarySelect(discord.ui.Select):
                 )
                 return
         
-        if not interaction.guild.voice_client.is_playing():
+        vc = interaction.guild.voice_client
+        if not vc.is_playing() and not vc.is_paused():
             if state.queue_position < 0:
                 state.queue_position = 0
             await self.music_cog._play_next(interaction.guild, force=True, advance=False)
-        
+
         names_str = ", ".join(f"**{n}**" for n in added)
         await interaction.followup.send(
             embed=success_embed("Added to Queue", f"{EMOJI['music']} {names_str}"),
@@ -869,7 +870,8 @@ class PlaylistManagerView(discord.ui.View):
                 return
 
         state = self.music_cog.state.guild_states.get(self.guild.id)
-        if not interaction.guild.voice_client.is_playing() and state:
+        vc = interaction.guild.voice_client
+        if state and not vc.is_playing() and not vc.is_paused():
             if state.queue_position < 0:
                 state.queue_position = 0
             await self.music_cog._play_next(self.guild, force=True, advance=False)
@@ -1125,7 +1127,8 @@ class PlaylistDetailView(discord.ui.View):
                 await interaction.followup.send(embed=error_embed("Failed to connect."), ephemeral=True)
                 return
 
-        if not self.guild.voice_client.is_playing():
+        vc = self.guild.voice_client
+        if not vc.is_playing() and not vc.is_paused():
             if state.queue_position < 0:
                 state.queue_position = 0
             await self.music_cog._play_next(self.guild, force=True, advance=False)
@@ -1157,7 +1160,8 @@ class PlaylistDetailView(discord.ui.View):
                 return
 
         state = self.music_cog.state.guild_states.get(self.guild.id)
-        if not self.guild.voice_client.is_playing() and state:
+        vc = self.guild.voice_client
+        if state and not vc.is_playing() and not vc.is_paused():
             if state.queue_position < 0:
                 state.queue_position = 0
             await self.music_cog._play_next(self.guild, force=True, advance=False)
@@ -1897,6 +1901,7 @@ class QueueView(discord.ui.View):
             await interaction.response.send_message(
                 embed=warning_embed("Join a voice channel first!"), ephemeral=True)
             return
+        await interaction.response.defer()
         target = int(interaction.data['values'][0])
         vc = self.guild.voice_client
         self.state.manual_queue_seek = True
@@ -1907,7 +1912,7 @@ class QueueView(discord.ui.View):
         await self.music_cog._play_next(self.guild, force=True, advance=False)
         self.state.manual_queue_seek = False
         self._rebuild()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
     async def _prev(self, interaction: discord.Interaction):
         self.page = max(0, self.page - 1)
@@ -1936,7 +1941,7 @@ class QueueView(discord.ui.View):
             await interaction.response.edit_message(embed=view.build_embed(), view=view)
         else:
             await interaction.response.send_message(
-                embed=success_embed("Queue Cleared", f"Removed {count} track(s)."))
+                embed=success_embed("Queue Cleared", f"Removed {count} track(s)."), ephemeral=True)
 
     async def _on_disconnect(self, interaction: discord.Interaction):
         if not await self._check_perms(interaction):
@@ -1985,12 +1990,6 @@ class Music(commands.Cog):
         self.tracks = TrackManager(bot.config)
         self.voice = VoiceHandler()
         self.health = HealthMonitor(bot)
-        
-        # Start background tasks
-        bot.loop.create_task(self._cleanup_loop())
-        bot.loop.create_task(self._activity_loop())
-        bot.loop.create_task(self.health.monitor_loop())
-        
         logging.info("Music cog loaded")
     
     async def cog_load(self):
@@ -2000,11 +1999,14 @@ class Music(commands.Cog):
         orphaned = self.db.validate_files()
         if orphaned:
             logging.info(f"Startup: cleaned {orphaned} orphaned entries")
-        
-        # Update all guilds to use current storage limit from config
+
         updated = self.db.update_all_storage_limits()
         if updated:
             logging.info(f"Startup: updated storage limits for {updated} guild(s)")
+
+        asyncio.create_task(self._cleanup_loop())
+        asyncio.create_task(self._activity_loop())
+        asyncio.create_task(self.health.monitor_loop())
     
     async def cog_unload(self):
         """Cleanup on cog unload"""
