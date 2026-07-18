@@ -5,8 +5,7 @@ import os
 import logging
 import time
 from datetime import datetime
-from cogs.music import Music
-from utils.monitoring import BotMonitor
+from music import Music
 
 # Set up logging
 def setup_logging():
@@ -24,7 +23,7 @@ def setup_logging():
         ]
     )
 
-class SporkMP3(commands.Bot):
+class SporkMP3(commands.AutoShardedBot):
     def __init__(self):
         # Set up minimal intents
         intents = discord.Intents.none()
@@ -36,14 +35,6 @@ class SporkMP3(commands.Bot):
         
         # Store startup time for health monitoring
         self.start_time = time.time()
-        
-        # Ensure opus is loaded for better audio performance
-        try:
-            if not discord.opus.is_loaded():
-                discord.opus.load_opus('opus')
-                logging.info("Opus library loaded successfully")
-        except Exception as e:
-            logging.warning(f"Could not load opus library: {e}. Using default.")
         
         # Load config
         try:
@@ -65,7 +56,7 @@ class SporkMP3(commands.Bot):
             music_cog = self.get_cog('Music')
             if music_cog:
                 logging.info("Running startup file validation...")
-                orphaned_count = music_cog.db.validate_persistent_files()
+                orphaned_count = music_cog.db.validate_files()
                 if orphaned_count > 0:
                     logging.info(f"Startup validation completed: {orphaned_count} orphaned entries cleaned")
                 else:
