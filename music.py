@@ -150,10 +150,9 @@ class PlayerHubView(discord.ui.View):
         state = self.music_cog.state.guild_states.get(self.guild.id)
         track = state.current_track if state else None
         if track and track.cover_url:
-            embed.set_thumbnail(url=track.cover_url)
-            await interaction.response.edit_message(embed=embed, view=self)
-        else:
-            await interaction.response.edit_message(embed=embed, view=self, attachments=[])
+            # File attachment is still on this message — reference it directly
+            embed.set_thumbnail(url="attachment://cover.png")
+        await interaction.response.edit_message(embed=embed, view=self)
 
     # ── Transport callbacks ───────────────────────────────────────────────────
     async def _on_play_pause(self, interaction: discord.Interaction):
