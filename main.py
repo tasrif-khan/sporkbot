@@ -109,18 +109,16 @@ class SporkMP3(commands.AutoShardedBot):
             music_cog = self.get_cog('Music')
             if music_cog:
                 # Clean up guild state
-                if guild.id in music_cog.music_state.guild_states:
-                    guild_state = music_cog.music_state.guild_states[guild.id]
-                    
+                if guild.id in music_cog.state.guild_states:
+                    guild_state = music_cog.state.guild_states[guild.id]
+
                     # Mark all files as inactive and clean up non-permanent tracks
                     for track in guild_state.queue:
-                        if track.downloaded_path:
-                            music_cog.track_manager.mark_file_inactive(track.downloaded_path)
                         if not track.is_permanent:
                             track.cleanup()
-                    
+
                     # Remove guild state
-                    del music_cog.music_state.guild_states[guild.id]
+                    del music_cog.state.guild_states[guild.id]
                     
                     logging.info(f"Cleaned up state for guild {guild.id}")
         except Exception as e:
