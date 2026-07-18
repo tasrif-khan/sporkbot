@@ -146,7 +146,14 @@ class PlayerHubView(discord.ui.View):
 
     async def _edit_in_place(self, interaction: discord.Interaction):
         self._rebuild()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        embed = self.build_embed()
+        state = self.music_cog.state.guild_states.get(self.guild.id)
+        track = state.current_track if state else None
+        if track and track.cover_url:
+            embed.set_thumbnail(url=track.cover_url)
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self, attachments=[])
 
     # ── Transport callbacks ───────────────────────────────────────────────────
     async def _on_play_pause(self, interaction: discord.Interaction):
