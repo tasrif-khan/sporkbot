@@ -2758,7 +2758,7 @@ class Music(commands.Cog):
             return
 
         if times is None:
-            # Toggle infinite loop
+            # Toggle: disable any active loop, or enable infinite if off
             if state.loop_enabled:
                 state.loop_enabled = False
                 state.loop_count   = 0
