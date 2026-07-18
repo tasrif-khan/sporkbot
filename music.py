@@ -268,14 +268,14 @@ class PlayerHubView(discord.ui.View):
             state.last_channel_id = interaction.channel_id
         tracks = self.music_cog.db.list_tracks(self.guild.id)
         view   = LibraryView(tracks, self.guild.id, self.music_cog, from_hub=True)
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        await interaction.response.edit_message(embed=view.build_embed(), view=view, attachments=[])
 
     async def _open_playlists(self, interaction: discord.Interaction):
         state = self.music_cog.state.guild_states.get(self.guild.id)
         if state:
             state.last_channel_id = interaction.channel_id
         view = PlaylistManagerView(self.music_cog, self.guild, interaction.user, from_hub=True)
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        await interaction.response.edit_message(embed=view.build_embed(), view=view, attachments=[])
 
     async def _open_queue(self, interaction: discord.Interaction):
         state = self.music_cog.state.guild_states.get(self.guild.id)
@@ -285,7 +285,7 @@ class PlayerHubView(discord.ui.View):
             return
         cur_page = max(0, state.queue_position // QueueView.TRACKS_PER_PAGE)
         view     = QueueView(state, self.music_cog, self.guild, page=cur_page, from_hub=True)
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        await interaction.response.edit_message(embed=view.build_embed(), view=view, attachments=[])
 
     async def on_timeout(self):
         self.clear_items()
@@ -676,8 +676,13 @@ class LibraryView(discord.ui.View):
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def _on_back(self, interaction: discord.Interaction):
-        view = PlayerHubView(self.music_cog, interaction.guild)
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        view  = PlayerHubView(self.music_cog, interaction.guild)
+        embed = view.build_embed()
+        state = self.music_cog.state.guild_states.get(interaction.guild_id)
+        track = state.current_track if state else None
+        if track and track.cover_url:
+            embed.set_thumbnail(url=track.cover_url)
+        await interaction.response.edit_message(embed=embed, view=view, attachments=[])
 
     async def _on_upload_url(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -930,8 +935,13 @@ class PlaylistManagerView(discord.ui.View):
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def _on_back_to_hub(self, interaction: discord.Interaction):
-        view = PlayerHubView(self.music_cog, self.guild)
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        view  = PlayerHubView(self.music_cog, self.guild)
+        embed = view.build_embed()
+        state = self.music_cog.state.guild_states.get(self.guild.id)
+        track = state.current_track if state else None
+        if track and track.cover_url:
+            embed.set_thumbnail(url=track.cover_url)
+        await interaction.response.edit_message(embed=embed, view=view, attachments=[])
 
     async def on_timeout(self):
         self.clear_items()
@@ -1941,7 +1951,7 @@ class QueueView(discord.ui.View):
         self.state.reset()
         if self.from_hub:
             view = PlayerHubView(self.music_cog, self.guild)
-            await interaction.response.edit_message(embed=view.build_embed(), view=view)
+            await interaction.response.edit_message(embed=view.build_embed(), view=view, attachments=[])
         else:
             await interaction.response.send_message(
                 embed=success_embed("Queue Cleared", f"Removed {count} track(s)."), ephemeral=True)
@@ -1969,14 +1979,18 @@ class QueueView(discord.ui.View):
         await vc.disconnect()
         if self.from_hub:
             view = PlayerHubView(self.music_cog, self.guild)
-            await interaction.response.edit_message(embed=view.build_embed(), view=view)
+            await interaction.response.edit_message(embed=view.build_embed(), view=view, attachments=[])
         else:
             await interaction.response.send_message(
                 embed=success_embed("Disconnected", "Cleared queue and left voice channel."))
 
     async def _on_back(self, interaction: discord.Interaction):
-        view = PlayerHubView(self.music_cog, self.guild)
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        view  = PlayerHubView(self.music_cog, self.guild)
+        embed = view.build_embed()
+        track = self.state.current_track
+        if track and track.cover_url:
+            embed.set_thumbnail(url=track.cover_url)
+        await interaction.response.edit_message(embed=embed, view=view, attachments=[])
 
     async def on_timeout(self):
         self.clear_items()
