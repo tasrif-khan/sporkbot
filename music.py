@@ -2746,53 +2746,41 @@ class Music(commands.Cog):
             f"{speed.name} — applies to next track."
         ), ephemeral=True)
     
-    @app_commands.command(name="loop", description="Set loop mode for current track")
-    @app_commands.choices(mode=[
-        app_commands.Choice(name="↻ Infinite loop", value=0),
-        app_commands.Choice(name="1× then stop",    value=1),
-        app_commands.Choice(name="2×",              value=2),
-        app_commands.Choice(name="3×",              value=3),
-        app_commands.Choice(name="5×",              value=5),
-        app_commands.Choice(name="10×",             value=10),
-        app_commands.Choice(name="Disable loop",    value=-1),
-    ])
+    @app_commands.command(name="loop", description="Toggle infinite loop, or pass a number to loop that many times")
+    @app_commands.describe(times="Number of times to loop (0 = disable, omit = toggle infinite)")
     @check_permissions()
     @safe_defer
-    async def loop(self, interaction: discord.Interaction, mode: app_commands.Choice[int] = None):
+    async def loop(self, interaction: discord.Interaction, times: int = None):
         state = await self._get_state(interaction)
 
         if not state.current_track:
             await interaction.followup.send(embed=warning_embed("Nothing is playing!"), ephemeral=True)
             return
 
-        # No argument = toggle
-        if mode is None:
+        if times is None:
+            # Toggle infinite loop
             if state.loop_enabled:
                 state.loop_enabled = False
                 state.loop_count   = 0
                 state.max_loops    = None
-                await interaction.followup.send(embed=success_embed("Loop Disabled", "Loop off."), ephemeral=True)
+                msg = "Loop off."
             else:
                 state.loop_enabled = True
                 state.loop_count   = 0
                 state.max_loops    = None
-                await interaction.followup.send(embed=success_embed(
-                    "Loop Enabled", f"{EMOJI['loop']} Looping current track (infinite)"), ephemeral=True)
-            await self._update_np_embed(interaction.guild)
-            return
-
-        if mode.value == -1:
+                msg = f"{EMOJI['loop']} Looping infinitely."
+            await interaction.followup.send(embed=success_embed("Loop", msg), ephemeral=True)
+        elif times <= 0:
             state.loop_enabled = False
             state.loop_count   = 0
             state.max_loops    = None
-            await interaction.followup.send(embed=success_embed("Loop Disabled", "Loop off."), ephemeral=True)
+            await interaction.followup.send(embed=success_embed("Loop", "Loop off."), ephemeral=True)
         else:
             state.loop_enabled = True
             state.loop_count   = 0
-            state.max_loops    = None if mode.value == 0 else mode.value
-            loop_text = "infinite" if mode.value == 0 else f"{mode.value}×"
+            state.max_loops    = times
             await interaction.followup.send(embed=success_embed(
-                "Loop Set", f"{EMOJI['loop']} Looping current track ({loop_text})"), ephemeral=True)
+                "Loop", f"{EMOJI['loop']} Looping **{times}×**."), ephemeral=True)
 
         await self._update_np_embed(interaction.guild)
     
@@ -3220,7 +3208,7 @@ class Music(commands.Cog):
             value=(
                 "`/volume <0-120>` › Set volume\n"
                 "`/speed` › Adjust playback speed\n"
-                "`/loop [mode]` › Loop current track\n"
+                "`/loop` › Toggle infinite loop · `/loop 3` › Loop 3× · `/loop 0` › Off\n"
                 "`/forward <s>` `/backward <s>` › Seek by seconds\n"
                 "`/seek` › Jump to specific timestamp"
             ),
