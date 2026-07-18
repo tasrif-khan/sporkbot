@@ -125,6 +125,10 @@ class SporkMP3(commands.AutoShardedBot):
             logging.error(f"Error cleaning up guild {guild.id}: {e}")
 
 def main():
+    # Pin CWD to the directory this script lives in so all relative paths
+    # (bot_settings.db, permanent/, temp/, logs/) are stable across restarts
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
     setup_logging()
     logging.info("Starting SporkMP3 bot...")
     
