@@ -1,6 +1,6 @@
 """
-Database management for the music bot.
-Handles guild settings, blacklists, whitelists, and persistent tracks.
+database management for the music bot.
+handles guild settings, blacklists, whitelists, and persistent tracks.
 """
 import sqlite3
 import logging
@@ -16,13 +16,13 @@ class Database:
     
     def __init__(self, db_path: str = 'bot_settings.db', max_storage_mb: int = 100):
         self.db_path = db_path
-        self.max_storage = max_storage_mb * 1024 * 1024  # Convert to bytes
+        self.max_storage = max_storage_mb * 1024 * 1024  # convert to bytes
         self._lock = threading.Lock()
         self._init_tables()
     
     @contextmanager
     def _connection(self, timeout: float = 20.0):
-        """Context manager for database connections"""
+        """context manager for database connections with wal mode"""
         conn = sqlite3.connect(self.db_path, timeout=timeout)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=10000")
@@ -34,7 +34,7 @@ class Database:
             conn.close()
     
     def _execute(self, query: str, params: tuple = (), fetch: str = None, retries: int = 5):
-        """Execute query with retry logic"""
+        """execute query with retry logic on locked database"""
         for attempt in range(retries):
             try:
                 with self._lock, self._connection() as conn:
@@ -51,7 +51,7 @@ class Database:
                 raise
     
     def _init_tables(self):
-        """Initialize all database tables"""
+        """initialize all database tables"""
         tables = f"""
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
@@ -119,7 +119,7 @@ class Database:
         logging.info("Database initialized")
 
     def _migrate(self):
-        """Add columns that were introduced after the initial schema."""
+        """add columns from later schema versions"""
         migrations = [
             "ALTER TABLE guild_settings ADD COLUMN playback_speed INTEGER DEFAULT 100",
             "ALTER TABLE guild_settings ADD COLUMN last_rating_request INTEGER DEFAULT 0",
@@ -128,19 +128,18 @@ class Database:
             try:
                 self._execute(sql)
             except sqlite3.OperationalError:
-                pass  # Column already exists
+                pass  # column already exists
     
-    # ========== Guild Settings ==========
-    
+    # guild settings - autoplay, autodisconnect, speed
     def _ensure_guild(self, guild_id: int):
-        """Ensure guild exists in settings table"""
+        """ensure guild exists in settings table"""
         self._execute(
             "INSERT OR IGNORE INTO guild_settings (guild_id) VALUES (?)",
             (guild_id,)
         )
     
     def _get_setting(self, guild_id: int, column: str, default: Any) -> Any:
-        """Get a guild setting value"""
+        """get a guild setting value with default"""
         self._ensure_guild(guild_id)
         row = self._execute(
             f"SELECT {column} FROM guild_settings WHERE guild_id = ?",
@@ -149,35 +148,32 @@ class Database:
         return row[0] if row else default
     
     def _set_setting(self, guild_id: int, column: str, value: Any):
-        """Set a guild setting value"""
+        """set a guild setting value"""
         self._ensure_guild(guild_id)
         self._execute(
             f"UPDATE guild_settings SET {column} = ? WHERE guild_id = ?",
             (value, guild_id)
         )
     
-    # Autoplay
     def get_autoplay(self, guild_id: int) -> bool:
         return bool(self._get_setting(guild_id, 'autoplay_enabled', True))
     
     def set_autoplay(self, guild_id: int, enabled: bool):
         self._set_setting(guild_id, 'autoplay_enabled', enabled)
     
-    # Autodisconnect
     def get_autodisconnect(self, guild_id: int) -> bool:
         return bool(self._get_setting(guild_id, 'autodisconnect_enabled', True))
     
     def set_autodisconnect(self, guild_id: int, enabled: bool):
         self._set_setting(guild_id, 'autodisconnect_enabled', enabled)
     
-    # Playback speed
     def get_speed(self, guild_id: int) -> int:
         return self._get_setting(guild_id, 'playback_speed', 100)
     
     def set_speed(self, guild_id: int, speed: int):
         self._set_setting(guild_id, 'playback_speed', max(50, min(200, speed)))
     
-    # Upload tracking
+    # upload tracking
     def get_upload_count(self, guild_id: int) -> int:
         return self._get_setting(guild_id, 'upload_count', 0)
     
@@ -191,75 +187,93 @@ class Database:
     def reset_uploads(self, guild_id: int):
         self._set_setting(guild_id, 'upload_count', 0)
     
+    # rating request throttling
     def get_last_rating_request(self, guild_id: int) -> int:
         return self._get_setting(guild_id, 'last_rating_request', 0)
     
     def set_last_rating_request(self, guild_id: int, timestamp: int):
         self._set_setting(guild_id, 'last_rating_request', timestamp)
     
-    # ========== Blacklist ==========
+    # blacklist - user blocking
+    def blacklist_user(self, guild_id: int, user_id: int):
+        """add user to blacklist"""
+        self._execute(
+            "INSERT OR IGNORE INTO blacklisted_users (guild_id, user_id) VALUES (?, ?)",
+            (guild_id, user_id)
+        )
+    
+    def unblacklist_user(self, guild_id: int, user_id: int) -> bool:
+        """remove user from blacklist, returns success"""
+        existing = self._execute(
+            "SELECT 1 FROM blacklisted_users WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id), fetch='one'
+        )
+        if not existing:
+            return False
+        self._execute(
+            "DELETE FROM blacklisted_users WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id)
+        )
+        return True
     
     def is_blacklisted(self, guild_id: int, user_id: int) -> bool:
+        """check if user is blacklisted"""
         row = self._execute(
             "SELECT 1 FROM blacklisted_users WHERE guild_id = ? AND user_id = ?",
             (guild_id, user_id), fetch='one'
         )
         return row is not None
     
-    def add_blacklist(self, guild_id: int, user_id: int):
-        self._execute(
-            "INSERT OR IGNORE INTO blacklisted_users (guild_id, user_id) VALUES (?, ?)",
-            (guild_id, user_id)
-        )
-    
-    def remove_blacklist(self, guild_id: int, user_id: int):
-        self._execute(
-            "DELETE FROM blacklisted_users WHERE guild_id = ? AND user_id = ?",
-            (guild_id, user_id)
-        )
-
-    def get_blacklisted_users(self, guild_id: int) -> List[int]:
-        rows = self._execute(
-            "SELECT user_id FROM blacklisted_users WHERE guild_id = ?",
-            (guild_id,), fetch='all'
-        )
-        return [row[0] for row in rows] if rows else []
-    
-    # ========== Role Whitelist ==========
-    
-    def get_whitelisted_roles(self, guild_id: int) -> List[int]:
-        rows = self._execute(
-            "SELECT role_id FROM whitelisted_roles WHERE guild_id = ?",
-            (guild_id,), fetch='all'
-        )
-        return [row[0] for row in rows] if rows else []
-    
-    def add_role_whitelist(self, guild_id: int, role_id: int):
+    # role whitelist - restrict to specific roles
+    def add_whitelisted_role(self, guild_id: int, role_id: int):
+        """add role to whitelist"""
         self._execute(
             "INSERT OR IGNORE INTO whitelisted_roles (guild_id, role_id) VALUES (?, ?)",
             (guild_id, role_id)
         )
     
-    def remove_role_whitelist(self, guild_id: int, role_id: int):
+    def remove_whitelisted_role(self, guild_id: int, role_id: int) -> bool:
+        """remove role from whitelist, returns success"""
+        existing = self._execute(
+            "SELECT 1 FROM whitelisted_roles WHERE guild_id = ? AND role_id = ?",
+            (guild_id, role_id), fetch='one'
+        )
+        if not existing:
+            return False
         self._execute(
             "DELETE FROM whitelisted_roles WHERE guild_id = ? AND role_id = ?",
             (guild_id, role_id)
         )
+        return True
     
-    # ========== Persistent Tracks ==========
-    
-    def add_track(self, guild_id: int, name: str, filename: str, path: str, uploader: str, size: int):
-        """Add a persistent track"""
-        self._execute(
-            """INSERT OR REPLACE INTO persistent_tracks 
-               (guild_id, track_name, filename, file_path, uploaded_by, upload_date, file_size)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (guild_id, name, filename, path, uploader, int(time.time()), size)
+    def get_whitelisted_roles(self, guild_id: int) -> List[int]:
+        """get all whitelisted role ids"""
+        rows = self._execute(
+            "SELECT role_id FROM whitelisted_roles WHERE guild_id = ? ORDER BY role_id",
+            (guild_id,), fetch='all'
         )
-        self._update_storage(guild_id, size)
+        return [r['role_id'] for r in rows] if rows else []
     
-    def remove_track(self, guild_id: int, name: str) -> Optional[str]:
-        """Remove a persistent track, returns file path"""
+    # persistent tracks - library management
+    def add_track(self, guild_id: int, name: str, filename: str, file_path: str, uploaded_by: str, file_size: int) -> bool:
+        """add track to library, returns success"""
+        existing = self._execute(
+            "SELECT 1 FROM persistent_tracks WHERE guild_id = ? AND track_name = ?",
+            (guild_id, name), fetch='one'
+        )
+        if existing:
+            return False
+        
+        self._execute(
+            "INSERT INTO persistent_tracks (guild_id, track_name, filename, file_path, uploaded_by, upload_date, file_size) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (guild_id, name, filename, file_path, uploaded_by, int(time.time()), file_size)
+        )
+        self._update_storage(guild_id, file_size)
+        return True
+    
+    def delete_track(self, guild_id: int, name: str) -> Optional[str]:
+        """delete track from library, returns file path or none"""
         row = self._execute(
             "SELECT file_path, file_size FROM persistent_tracks WHERE guild_id = ? AND track_name = ?",
             (guild_id, name), fetch='one'
@@ -275,7 +289,7 @@ class Database:
         return row['file_path']
     
     def get_track(self, guild_id: int, name: str) -> Optional[Dict]:
-        """Get a persistent track by name"""
+        """get persistent track by name"""
         row = self._execute(
             "SELECT * FROM persistent_tracks WHERE guild_id = ? AND track_name = ?",
             (guild_id, name), fetch='one'
@@ -283,7 +297,7 @@ class Database:
         return dict(row) if row else None
     
     def list_tracks(self, guild_id: int) -> List[Dict]:
-        """List all persistent tracks for a guild"""
+        """list all persistent tracks for guild"""
         rows = self._execute(
             """SELECT track_name, filename, uploaded_by, upload_date, file_size 
                FROM persistent_tracks WHERE guild_id = ? ORDER BY track_name""",
@@ -291,10 +305,9 @@ class Database:
         )
         return [dict(row) for row in rows] if rows else []
     
-    # ========== Storage Management ==========
-    
+    # storage management - track usage
     def _update_storage(self, guild_id: int, delta: int):
-        """Update guild storage usage"""
+        """update guild storage usage by delta"""
         self._execute(
             """INSERT INTO guild_storage (guild_id, used_storage) VALUES (?, MAX(0, ?))
                ON CONFLICT(guild_id) DO UPDATE SET used_storage = MAX(0, used_storage + ?)""",
@@ -302,13 +315,13 @@ class Database:
         )
     
     def get_storage(self, guild_id: int) -> Dict[str, int]:
-        """Get guild storage usage and ensure max_storage is up to date"""
+        """get guild storage usage and max"""
         row = self._execute(
             "SELECT used_storage, max_storage FROM guild_storage WHERE guild_id = ?",
             (guild_id,), fetch='one'
         )
         if row:
-            # Update max_storage if it differs from current config
+            # update max_storage if config changed
             if row['max_storage'] != self.max_storage:
                 self._execute(
                     "UPDATE guild_storage SET max_storage = ? WHERE guild_id = ?",
@@ -320,12 +333,12 @@ class Database:
         return {'used': 0, 'max': self.max_storage}
     
     def can_store(self, guild_id: int, size: int) -> bool:
-        """Check if file can be stored"""
+        """check if file can be stored within limit"""
         storage = self.get_storage(guild_id)
         return storage['used'] + size <= storage['max']
     
     def update_all_storage_limits(self) -> int:
-        """Update max_storage for all guilds to match current config"""
+        """update max_storage for all guilds"""
         count = self._execute(
             "UPDATE guild_storage SET max_storage = ? WHERE max_storage != ?",
             (self.max_storage, self.max_storage)
@@ -334,10 +347,9 @@ class Database:
             logging.info(f"Updated storage limits for {count} guild(s) to {self.max_storage / 1024 / 1024}MB")
         return count if count else 0
     
-    # ========== Playlists ==========
-    
+    # playlists - custom track collections
     def create_playlist(self, guild_id: int, name: str, created_by: str, description: str = '') -> bool:
-        """Create a new playlist. Returns False if it already exists."""
+        """create new playlist, returns false if exists"""
         existing = self._execute(
             "SELECT 1 FROM playlists WHERE guild_id = ? AND playlist_name = ?",
             (guild_id, name), fetch='one'
@@ -351,7 +363,7 @@ class Database:
         return True
     
     def delete_playlist(self, guild_id: int, name: str) -> bool:
-        """Delete a playlist and its tracks. Returns False if not found."""
+        """delete playlist and its tracks, returns success"""
         existing = self._execute(
             "SELECT 1 FROM playlists WHERE guild_id = ? AND playlist_name = ?",
             (guild_id, name), fetch='one'
@@ -369,7 +381,7 @@ class Database:
         return True
     
     def get_playlist(self, guild_id: int, name: str) -> Optional[Dict]:
-        """Get playlist info"""
+        """get playlist info"""
         row = self._execute(
             "SELECT * FROM playlists WHERE guild_id = ? AND playlist_name = ?",
             (guild_id, name), fetch='one'
@@ -377,7 +389,7 @@ class Database:
         return dict(row) if row else None
     
     def list_playlists(self, guild_id: int) -> List[Dict]:
-        """List all playlists for a guild"""
+        """list all playlists for guild"""
         rows = self._execute(
             "SELECT p.*, COUNT(pt.track_name) as track_count FROM playlists p "
             "LEFT JOIN playlist_tracks pt ON p.guild_id = pt.guild_id AND p.playlist_name = pt.playlist_name "
@@ -387,21 +399,21 @@ class Database:
         return [dict(row) for row in rows] if rows else []
     
     def add_to_playlist(self, guild_id: int, playlist_name: str, track_name: str, added_by: str) -> Optional[str]:
-        """Add a library track to a playlist. Returns error string or None on success."""
-        # Check playlist exists
+        """add library track to playlist, returns error or none"""
+        # check playlist exists
         if not self.get_playlist(guild_id, playlist_name):
             return "Playlist not found"
-        # Check track exists in library
+        # check track exists in library
         if not self.get_track(guild_id, track_name):
             return "Track not found in library"
-        # Check not already in playlist
+        # check not already in playlist
         existing = self._execute(
             "SELECT 1 FROM playlist_tracks WHERE guild_id = ? AND playlist_name = ? AND track_name = ?",
             (guild_id, playlist_name, track_name), fetch='one'
         )
         if existing:
             return "Track already in playlist"
-        # Get next position
+        # get next position
         row = self._execute(
             "SELECT COALESCE(MAX(position), 0) + 1 as next_pos FROM playlist_tracks WHERE guild_id = ? AND playlist_name = ?",
             (guild_id, playlist_name), fetch='one'
@@ -414,7 +426,7 @@ class Database:
         return None
     
     def remove_from_playlist(self, guild_id: int, playlist_name: str, track_name: str) -> bool:
-        """Remove a track from a playlist. Returns False if not found."""
+        """remove track from playlist, returns success"""
         existing = self._execute(
             "SELECT 1 FROM playlist_tracks WHERE guild_id = ? AND playlist_name = ? AND track_name = ?",
             (guild_id, playlist_name, track_name), fetch='one'
@@ -428,7 +440,7 @@ class Database:
         return True
     
     def get_playlist_tracks(self, guild_id: int, playlist_name: str) -> List[Dict]:
-        """Get all tracks in a playlist with their library info"""
+        """get all tracks in playlist with library info"""
         rows = self._execute(
             "SELECT pt.track_name, pt.position, pt.added_by, "
             "p.filename, p.file_path, p.file_size "
@@ -440,10 +452,9 @@ class Database:
         )
         return [dict(row) for row in rows] if rows else []
     
-    # ========== Maintenance ==========
-    
+    # maintenance - cleanup and validation
     def validate_files(self) -> int:
-        """Remove database entries for missing files"""
+        """remove database entries for missing files"""
         rows = self._execute(
             "SELECT guild_id, track_name, file_path, file_size FROM persistent_tracks",
             fetch='all'
