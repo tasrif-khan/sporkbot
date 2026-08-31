@@ -1,6 +1,6 @@
 """
-State management for the music bot.
-Combines guild state, audio track handling, and playback position tracking.
+state management for the music bot.
+tracks guild state, audio tracks, and playback position.
 """
 import os
 import time
@@ -18,26 +18,26 @@ from codec import ensure_playable
 
 @dataclass
 class AudioTrack:
-    """Represents an audio track in the queue"""
+    """represents audio track in the queue"""
     url: str
     filename: str
     requester: str
     file_size: int
     is_permanent: bool = False
     
-    # Set after download
+    # set after download
     downloaded_path: Optional[str] = None
-    converted_path: Optional[str] = None  # Set if codec conversion was needed
+    converted_path: Optional[str] = None  # codec conversion output
     duration: float = 0
     bitrate: int = 192
     volume: int = 100
     
-    # Metadata
+    # metadata - title, artist, cover
     title: Optional[str] = None
     artist: Optional[str] = None
-    cover_url: Optional[str] = None  # Discord CDN URL once artwork has been uploaded
+    cover_url: Optional[str] = None  # discord cdn url
 
-    # Playback tracking
+    # playback state tracking
     position: float = 0
     playback_start_time: Optional[float] = None
     paused_position: float = 0
@@ -45,20 +45,19 @@ class AudioTrack:
     last_accessed: float = field(default_factory=time.time)
     
     def get_display_name(self) -> str:
-        """Get the best display name for the track"""
-        # Priority: metadata title + artist > metadata title > cleaned filename
+        """get best display name - metadata title artist or filename"""
         if self.title:
             if self.artist:
                 return f"{self.artist} - {self.title}"
             return self.title
         
-        # Fall back to cleaned filename (remove extension and underscores)
-        name = os.path.splitext(self.filename)[0]  # Remove extension
-        name = name.replace('_', ' ')  # Replace underscores with spaces
+        # fallback to filename without extension
+        name = os.path.splitext(self.filename)[0]
+        name = name.replace('_', ' ')
         return name
     
     def get_artwork(self) -> Optional[bytes]:
-        """Return raw cover art bytes extracted from the audio file, or None."""
+        """extract raw cover art bytes from audio file"""
         path = self.playback_path or self.downloaded_path
         if not path or not os.path.exists(path):
             return None
@@ -82,21 +81,18 @@ class AudioTrack:
 
     @property
     def playback_path(self) -> Optional[str]:
-        """Path to use for FFmpeg playback — converted file if available, else original"""
+        """path for ffmpeg - converted file if available else original"""
         return self.converted_path or self.downloaded_path
     
     def get_metadata(self, file_path: str) -> float:
-        """Extract duration, bitrate, title, and artist from audio file.
+        """extract duration, bitrate, title, artist from file
         
-        Uses a fallback chain:
-          1. Extension-specific parser (MP3/MP4)
-          2. Generic MutagenFile (detects actual format regardless of extension)
-          3. ffprobe as last resort (handles anything FFmpeg can read)
+        tries: extension parser -> mutagen -> ffprobe
         """
         audio = None
         ext = file_path.lower().split('.')[-1]
         
-        # Step 1: Try extension-specific parser
+        # try extension-specific parser first
         try:
             if ext == 'mp3':
                 audio = MP3(file_path)
@@ -105,14 +101,14 @@ class AudioTrack:
         except Exception as e:
             logging.debug(f"Extension-specific parser failed for {file_path}: {e}")
         
-        # Step 2: Fall back to generic MutagenFile (auto-detects real format)
+        # fallback to generic mutagen
         if audio is None:
             try:
                 audio = MutagenFile(file_path)
             except Exception as e:
                 logging.debug(f"MutagenFile fallback failed for {file_path}: {e}")
         
-        # Step 3: If mutagen worked, extract metadata
+        # extract metadata if mutagen worked
         if audio is not None:
             try:
                 self._extract_tags(audio)
@@ -121,7 +117,7 @@ class AudioTrack:
                 self.title = None
                 self.artist = None
             
-            # Get bitrate
+            # get bitrate
             if hasattr(audio.info, 'bitrate') and audio.info.bitrate:
                 self.bitrate = audio.info.bitrate // 1000
             elif hasattr(audio.info, 'length') and audio.info.length > 0:
@@ -129,19 +125,19 @@ class AudioTrack:
             else:
                 self.bitrate = 192
             
-            # Get duration
+            # get duration
             duration = getattr(audio.info, 'length', None) or getattr(audio.info, 'duration', None)
             if duration and duration > 0:
                 display_name = self.get_display_name()
                 logging.info(f"Extracted metadata: {display_name} - {duration:.1f}s @ {self.bitrate}kbps")
                 return duration
         
-        # Step 4: ffprobe fallback — handles mislabeled files, rare codecs, etc.
+        # ffprobe fallback for mislabeled or rare codec files
         logging.info(f"Mutagen failed, falling back to ffprobe for {file_path}")
         return self._get_metadata_ffprobe(file_path)
     
     def _extract_tags(self, audio):
-        """Extract title and artist tags based on the actual mutagen type."""
+        """extract title and artist tags based on mutagen type"""
         self.title = None
         self.artist = None
         
@@ -164,7 +160,7 @@ class AudioTrack:
             self.artist = str(self.artist).strip()
     
     def _get_metadata_ffprobe(self, file_path: str) -> float:
-        """Extract duration and bitrate using ffprobe (synchronous subprocess)."""
+        """extract duration and bitrate using ffprobe synchronously"""
         import subprocess
         import json as _json
         
@@ -187,19 +183,19 @@ class AudioTrack:
             
             data = _json.loads(result.stdout)
             
-            # Duration
+            # get duration
             duration = float(data.get('format', {}).get('duration', 0))
             if duration <= 0:
                 raise ValueError(f"Cannot determine duration: {file_path}")
             
-            # Bitrate
+            # get bitrate
             streams = data.get('streams', [])
             if streams and streams[0].get('bit_rate'):
                 self.bitrate = int(streams[0]['bit_rate']) // 1000
             else:
                 self.bitrate = 192
             
-            # Tags from format metadata
+            # get tags from format metadata
             tags = data.get('format', {}).get('tags', {})
             if tags:
                 self.title = self.title or tags.get('title') or tags.get('TITLE')
@@ -214,7 +210,7 @@ class AudioTrack:
             raise
     
     async def download(self, temp_folder: str, retries: int = 3):
-        """Download the audio file"""
+        """download audio file from url with retries"""
         safe_name = ''.join(c for c in self.filename if c.isalnum() or c in '._- ')
         self.downloaded_path = os.path.join(temp_folder, safe_name)
         
@@ -231,7 +227,7 @@ class AudioTrack:
                             self.last_accessed = time.time()
                             logging.info(f"Downloaded: {self.filename}")
                             
-                            # Probe codec and convert if incompatible
+                            # probe codec and convert if needed
                             await self._ensure_compatible(temp_folder)
                             return
                         logging.warning(f"Download failed (status {resp.status}): {self.filename}")
@@ -243,18 +239,18 @@ class AudioTrack:
                     raise
     
     async def _ensure_compatible(self, temp_folder: str):
-        """Probe the downloaded file and convert if the codec is incompatible."""
+        """probe file and convert if codec incompatible"""
         try:
             playable_path, was_converted = await ensure_playable(
                 self.downloaded_path, temp_folder
             )
             if was_converted:
                 self.converted_path = playable_path
-                # Re-read duration from the converted file in case it changed
+                # reread duration from converted if changed
                 try:
                     self.duration = self.get_metadata(playable_path)
                 except Exception:
-                    pass  # Keep original duration if metadata read fails
+                    pass  # keep original duration on failure
                 logging.info(
                     f"Codec conversion complete for {self.filename} → {os.path.basename(playable_path)}"
                 )
@@ -263,8 +259,8 @@ class AudioTrack:
             raise
     
     def cleanup(self):
-        """Remove downloaded file, converted file, and reset state"""
-        # Remove converted file (always temporary, never permanent)
+        """remove files and reset playback state"""
+        # remove converted file - always temporary
         if self.converted_path and os.path.exists(self.converted_path):
             try:
                 os.remove(self.converted_path)
@@ -273,7 +269,7 @@ class AudioTrack:
                 logging.error(f"Cleanup failed for converted {self.converted_path}: {e}")
         self.converted_path = None
         
-        # Remove original downloaded file
+        # remove original downloaded file if not permanent
         if not self.is_permanent and self.downloaded_path and os.path.exists(self.downloaded_path):
             try:
                 os.remove(self.downloaded_path)
@@ -288,26 +284,26 @@ class AudioTrack:
         self.is_paused = False
     
     def start_playback(self, position: float = None):
-        """Mark track as playing"""
+        """mark track as playing"""
         if position is not None:
             self.position = position
         self.playback_start_time = time.time() - self.position
         self.is_paused = False
     
     def pause_playback(self):
-        """Pause and store current position"""
+        """pause and store current position"""
         if not self.is_paused and self.playback_start_time:
             self.paused_position = time.time() - self.playback_start_time
             self.is_paused = True
     
     def resume_playback(self):
-        """Resume from paused position"""
+        """resume from paused position"""
         if self.is_paused:
             self.playback_start_time = time.time() - self.paused_position
             self.is_paused = False
     
     def get_current_position(self) -> float:
-        """Get current playback position in seconds"""
+        """get current playback position in seconds"""
         if not self.playback_start_time:
             return self.position
         if self.is_paused:
@@ -315,7 +311,7 @@ class AudioTrack:
         return min(time.time() - self.playback_start_time, self.duration)
     
     def to_dict(self) -> dict:
-        """Convert to dictionary for display"""
+        """convert track to display dictionary"""
         return {
             'filename': self.filename,
             'requester': self.requester,
@@ -328,36 +324,36 @@ class AudioTrack:
 
 @dataclass
 class GuildState:
-    """Stores playback state for a single guild"""
+    """stores playback state for single guild"""
     queue: List[AudioTrack] = field(default_factory=list)
     queue_position: int = -1
     volume: int = 100
     last_activity: float = field(default_factory=time.time)
     last_channel_id: Optional[int] = None
     
-    # Loop settings
+    # loop settings
     loop_enabled: bool = False
     loop_count: int = 0
     max_loops: Optional[int] = None
     
-    # Playback control flags
+    # playback control flags
     is_seeking: bool = False
     manual_queue_seek: bool = False
     is_stopped: bool = False
     
-    # UI state
-    last_np_message: object = None  # discord.Message reference for edit-in-place
-    last_np_track: object = None    # AudioTrack the NP message was sent for
+    # ui state - now playing message tracking
+    last_np_message: object = None  # discord.Message reference
+    last_np_track: object = None    # AudioTrack for that message
     
     @property
     def current_track(self) -> Optional[AudioTrack]:
-        """Get current track based on queue position"""
+        """get current track based on queue position"""
         if 0 <= self.queue_position < len(self.queue):
             return self.queue[self.queue_position]
         return None
     
     def reset(self):
-        """Reset playback state (keeps settings like volume)"""
+        """reset playback state, keep volume setting"""
         self.queue.clear()
         self.queue_position = -1
         self.loop_enabled = False
@@ -371,21 +367,21 @@ class GuildState:
 
 
 class MusicState:
-    """Manages music state across all guilds"""
+    """manages music state across all guilds"""
     def __init__(self):
         self.guild_states: Dict[int, GuildState] = {}
         self.alone_since: Dict[int, float] = {}
         self.rate_limits: Dict[int, float] = {}
     
     async def get_guild_state(self, guild_id: int) -> GuildState:
-        """Get or create guild state"""
+        """get or create guild state and update activity"""
         if guild_id not in self.guild_states:
             self.guild_states[guild_id] = GuildState()
         self.guild_states[guild_id].last_activity = time.time()
         return self.guild_states[guild_id]
     
     def check_rate_limit(self, guild_id: int, cooldown: float = 2.0) -> bool:
-        """Check if guild is rate limited (returns True if allowed)"""
+        """check if guild is rate limited, returns true if allowed"""
         now = time.time()
         if guild_id in self.rate_limits and now - self.rate_limits[guild_id] < cooldown:
             return False
