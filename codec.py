@@ -1,12 +1,8 @@
 """
-Codec detection and conversion for SporkMP3.
-Handles xHE-AAC (USAC) and other incompatible codecs by transcoding
-to a format that discord.py's FFmpegPCMAudio can handle.
+codec detection and conversion for SporkMP3.
+transcodes incompatible codecs (xHE-AAC, USAC) to discord.py format.
 
-Decoder strategy for xHE-AAC:
-  1. Try libfdk_aac decoder if available (best quality, license-restricted)
-  2. Fall back to native FFmpeg decoder with -strict experimental
-  3. Validate output: duration sanity check + silence detection
+strategy: try libfdk_aac decoder first, then native with -strict experimental, validate output.
 """
 import asyncio
 import json
@@ -16,37 +12,32 @@ import struct
 from typing import Optional, Tuple
 
 
-# Codecs that FFmpegPCMAudio can decode natively (no conversion needed)
+# native codecs - discord.py handles these directly
 NATIVE_CODECS = {
-    # PCM / lossless
     'pcm_s16le', 'pcm_s16be', 'pcm_s24le', 'pcm_s24be',
     'pcm_s32le', 'pcm_s32be', 'pcm_f32le', 'pcm_f64le',
     'flac', 'alac', 'wavpack',
-    # Lossy – widely supported
     'mp3', 'mp2', 'aac', 'vorbis', 'opus',
     'wmav1', 'wmav2', 'adpcm_ms', 'adpcm_ima_wav',
 }
 
-# Codecs that REQUIRE conversion (known problematic)
+# codecs requiring conversion - known problematic
 CONVERT_CODECS = {
-    'usac',          # xHE-AAC / USAC — the main target
-    'als',           # ALS lossless (rare, MPEG-4)
+    'usac',          # xHE-AAC main target
+    'als',           # ALS lossless rare
     'sls',           # SLS scalable lossless
 }
 
-# Supported input container extensions (the formats SporkMP3 accepts)
+# supported input file extensions
 SUPPORTED_EXTENSIONS = {'.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.mp4', '.webm'}
 
-# Cache for decoder availability (checked once per process)
+# cache decoder availability per process
 _decoder_cache: dict = {}
 
 
-# ============================================================================
-# DECODER AVAILABILITY
-# ============================================================================
-
+# decoder availability checks
 async def _check_decoder(decoder_name: str) -> bool:
-    """Check whether a specific FFmpeg decoder is available on this system."""
+    """check if specific FFmpeg decoder is available"""
     if decoder_name in _decoder_cache:
         return _decoder_cache[decoder_name]
 
@@ -68,19 +59,13 @@ async def _check_decoder(decoder_name: str) -> bool:
 
 
 async def has_fdk_aac() -> bool:
-    """Check if libfdk_aac decoder is available (best xHE-AAC quality)."""
+    """check if libfdk_aac is available for best quality"""
     return await _check_decoder('libfdk_aac')
 
 
-# ============================================================================
-# PROBING
-# ============================================================================
-
+# probing - detect codec and extract metadata
 async def probe_codec(file_path: str) -> Optional[str]:
-    """
-    Use ffprobe to detect the audio codec of a file.
-    Returns the codec name (e.g. 'aac', 'mp3', 'usac') or None on failure.
-    """
+    """use ffprobe to detect audio codec name"""
     try:
         proc = await asyncio.create_subprocess_exec(
             'ffprobe',
@@ -115,9 +100,7 @@ async def probe_codec(file_path: str) -> Optional[str]:
 
 
 async def probe_format_details(file_path: str) -> dict:
-    """
-    Get extended probe info: codec, sample_rate, channels, bit_rate, duration.
-    """
+    """get extended probe info - codec, sample rate, channels, bitrate, duration"""
     try:
         proc = await asyncio.create_subprocess_exec(
             'ffprobe',
@@ -159,16 +142,9 @@ async def probe_format_details(file_path: str) -> dict:
         return {}
 
 
-# ============================================================================
-# VALIDATION
-# ============================================================================
-
+# validation - check converted output for issues
 async def _detect_mean_volume(file_path: str) -> Optional[float]:
-    """
-    Use ffmpeg volumedetect to get mean volume of the output file.
-    Returns mean_volume in dB, or None on failure.
-    A fully silent file reads around -91 dB or -inf.
-    """
+    """use ffmpeg volumedetect to get mean volume in dB"""
     try:
         proc = await asyncio.create_subprocess_exec(
             'ffmpeg',
@@ -200,17 +176,14 @@ async def _validate_conversion(
     output_path: str,
     source_duration: float,
 ) -> Tuple[bool, str]:
-    """
-    Validate converted output isn't corrupt, silent, or truncated.
-    Returns (is_valid, reason).
-    """
-    # 1. File exists and isn't empty
+    """validate converted output isn't corrupt, silent, or truncated"""
+    # check file exists and not empty
     if not os.path.exists(output_path):
         return False, "Output file does not exist"
     if os.path.getsize(output_path) == 0:
         return False, "Output file is empty (0 bytes)"
 
-    # 2. Duration sanity check (allow 2s or 10% drift)
+    # duration sanity check - allow 2s or 10% drift
     out_details = await probe_format_details(output_path)
     out_duration = out_details.get('duration', 0)
 
@@ -220,148 +193,63 @@ async def _validate_conversion(
         if drift > 2.0 and pct > 0.10:
             return False, (
                 f"Duration mismatch: source={source_duration:.1f}s, "
-                f"output={out_duration:.1f}s (drift={pct:.0%})"
+                f"output={out_duration:.1f}s (drift={pct*100:.1f}%)"
             )
 
-    # 3. Silence detection — catch garbled/zeroed output
+    # silence detection - mean volume check
     mean_vol = await _detect_mean_volume(output_path)
-    if mean_vol is not None and mean_vol < -80.0:
-        return False, f"Output appears silent (mean_volume={mean_vol:.1f} dB)"
+    if mean_vol is not None:
+        if mean_vol < -90:
+            return False, f"Output is silent (mean_volume={mean_vol:.1f} dB)"
 
-    return True, "OK"
-
-
-def _read_aac_object_type(file_path: str) -> Optional[int]:
-    """
-    Read the Audio Object Type directly from an MP4/M4A file's esds atom.
-
-    This is ffprobe-version-independent: AOT 42 = USAC/xHE-AAC regardless
-    of how ffprobe labels the codec_name or profile fields.
-
-    Returns the AOT number (e.g. 2=AAC-LC, 42=USAC) or None if unreadable.
-    """
-    try:
-        # Find the 'moov' box by parsing top-level MP4 boxes
-        moov_offset = None
-        moov_size = None
-
-        with open(file_path, 'rb') as f:
-            file_size = f.seek(0, 2)
-            f.seek(0)
-
-            pos = 0
-            while pos < file_size:
-                f.seek(pos)
-                header = f.read(8)
-                if len(header) < 8:
-                    break
-
-                box_size, box_type = struct.unpack('>I4s', header)
-
-                if box_size == 0:           # box extends to EOF
-                    box_size = file_size - pos
-                elif box_size == 1:          # 64-bit extended size
-                    ext = f.read(8)
-                    if len(ext) < 8:
-                        break
-                    box_size = struct.unpack('>Q', ext)[0]
-
-                if box_type == b'moov':
-                    moov_offset = pos
-                    moov_size = box_size
-                    break
-
-                if box_size < 8:             # prevent infinite loop
-                    break
-                pos += box_size
-
-        if moov_offset is None:
-            return None
-
-        # Read the moov box and search for esds within it
-        with open(file_path, 'rb') as f:
-            f.seek(moov_offset)
-            moov_data = f.read(min(moov_size, 2 * 1024 * 1024))  # cap at 2 MB
-
-        idx = moov_data.find(b'esds')
-        if idx < 0:
-            return None
-
-        # esds box: 4-byte type already consumed by find; skip version+flags
-        pos = idx + 4 + 4
-
-        def _read_desc_header(data, p):
-            """Read MPEG-4 descriptor tag + variable-length size."""
-            if p >= len(data):
-                return None, 0, p
-            tag = data[p]; p += 1
-            length = 0
-            for _ in range(4):
-                if p >= len(data):
-                    return tag, length, p
-                b = data[p]; p += 1
-                length = (length << 7) | (b & 0x7F)
-                if not (b & 0x80):
-                    break
-            return tag, length, p
-
-        # ES_Descriptor (tag 0x03) → skip ES_ID(2) + flags(1)
-        tag, _, pos = _read_desc_header(moov_data, pos)
-        if tag != 0x03:
-            return None
-        pos += 3
-
-        # DecoderConfigDescriptor (tag 0x04) → skip 13 bytes
-        tag, _, pos = _read_desc_header(moov_data, pos)
-        if tag != 0x04:
-            return None
-        pos += 13
-
-        # DecoderSpecificInfo (tag 0x05) → AudioSpecificConfig
-        tag, _, pos = _read_desc_header(moov_data, pos)
-        if tag != 0x05:
-            return None
-
-        if pos + 1 >= len(moov_data):
-            return None
-
-        # AudioObjectType: first 5 bits (extended form if == 31)
-        aot = (moov_data[pos] >> 3) & 0x1F
-        if aot == 31:
-            aot = 32 + (((moov_data[pos] & 0x07) << 3) | ((moov_data[pos + 1] >> 5) & 0x07))
-
-        return aot
-
-    except Exception as e:
-        logging.debug(f"Failed to read AAC object type from {file_path}: {e}")
-        return None
-
-
-# USAC Audio Object Type (MPEG-D Unified Speech and Audio Coding)
-_AOT_USAC = 42
+    return True, "Valid"
 
 
 def _is_xhe_aac_file(file_path: str) -> bool:
-    """
-    Detect xHE-AAC / USAC by reading the Audio Object Type from the MP4 container.
-    Returns True if AOT == 42 (USAC).
-    """
-    aot = _read_aac_object_type(file_path)
-    if aot == _AOT_USAC:
-        logging.info(f"xHE-AAC detected (AOT {aot}) in {file_path}")
-        return True
-    if aot is not None:
-        logging.debug(f"AAC AOT {aot} (not USAC) in {file_path}")
-    return False
+    """check mp4 for xHE-AAC (USAC AOT 42) audio object type"""
+    try:
+        with open(file_path, 'rb') as f:
+            # minimal mp4 parsing - find ftyp and moov atoms
+            f.seek(0)
+            data = f.read(1024)
+            if b'ftyp' not in data:
+                return False
+            
+            f.seek(0)
+            while True:
+                size_bytes = f.read(4)
+                if len(size_bytes) < 4:
+                    break
+                
+                box_type = f.read(4)
+                if len(box_type) < 4:
+                    break
+                
+                size = struct.unpack('>I', size_bytes)[0]
+                if size < 8:
+                    break
+                
+                if box_type == b'moov':
+                    # search for USAC audio object type in moov
+                    moov_data = f.read(size - 8)
+                    if b'esds' in moov_data:
+                        esds_idx = moov_data.find(b'esds')
+                        if esds_idx >= 20:
+                            aot_byte = moov_data[esds_idx + 20]
+                            if aot_byte == 42:  # xHE-AAC
+                                return True
+                    break
+                
+                f.seek(size - 8, 1)
+        
+        return False
+    except Exception as e:
+        logging.debug(f"xHE-AAC detection failed: {e}")
+        return False
 
 
 def needs_conversion(codec_name: Optional[str]) -> bool:
-    """
-    Determine whether a codec needs transcoding.
-    - Known native codecs → False
-    - Known problematic codecs → True
-    - Unknown codecs → True (safe default: convert rather than crash)
-    """
+    """check if codec needs conversion for discord compatibility"""
     if codec_name is None:
         return True
 
@@ -372,14 +260,11 @@ def needs_conversion(codec_name: Optional[str]) -> bool:
     if codec in CONVERT_CODECS:
         return True
 
-    logging.info(f"Unknown codec '{codec}' — will convert to ensure compatibility")
+    logging.info(f"Unknown codec '{codec}' converting to ensure compatibility")
     return True
 
 
-# ============================================================================
-# CONVERSION
-# ============================================================================
-
+# conversion - transcode audio files
 async def _run_ffmpeg_convert(
     input_path: str,
     output_path: str,
@@ -388,27 +273,24 @@ async def _run_ffmpeg_convert(
     bitrate: str,
     target_format: str,
 ) -> Tuple[bool, str]:
-    """
-    Run a single FFmpeg conversion attempt with the specified decoder.
-    Returns (success, stderr_tail).
-    """
+    """run single FFmpeg conversion attempt with specified decoder"""
     cmd = ['ffmpeg', '-y', '-hide_banner']
 
-    # Force specific decoder for the input stream
+    # force specific decoder if specified
     if decoder:
         cmd += ['-c:a', decoder]
 
-    # Allow experimental decoders (native USAC needs this)
+    # allow experimental decoders for native USAC
     cmd += ['-strict', 'experimental']
 
     cmd += [
         '-i', input_path,
-        '-vn',                   # No video
-        '-c:a', target_codec,    # Output codec
-        '-b:a', bitrate,         # Output bitrate
-        '-ar', '48000',          # Discord standard sample rate
-        '-ac', '2',              # Stereo
-        '-f', target_format,     # Output container
+        '-vn',                   # no video
+        '-c:a', target_codec,    # output codec
+        '-b:a', bitrate,         # output bitrate
+        '-ar', '48000',          # discord standard sample rate
+        '-ac', '2',              # stereo
+        '-f', target_format,     # output container
         output_path,
     ]
 
@@ -441,19 +323,15 @@ async def convert_to_compatible(
     bitrate: str = '192k',
 ) -> Tuple[Optional[str], Optional[float]]:
     """
-    Transcode an audio file to a format compatible with discord.py.
-
-    Uses a multi-strategy approach for xHE-AAC and other problem codecs:
-      1. Try libfdk_aac decoder if available (best quality)
-      2. Fall back to native decoder with -strict experimental
-      3. Validate output to catch silence, truncation, or artifacts
-
-    Returns (output_path, duration) on success, (None, None) on failure.
+    transcode audio to discord.py compatible format.
+    
+    multi-strategy: tries libfdk_aac first for xHE-AAC, falls back to native decoder.
+    validates output for silence, truncation, or corruption.
     """
     base = os.path.splitext(os.path.basename(input_path))[0]
     output_path = os.path.join(output_dir, f"{base}_converted.{target_format}")
 
-    # Avoid re-converting if output already exists and passes validation
+    # use conversion cache if output exists and validates
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         valid, reason = await _validate_conversion(input_path, output_path, source_duration)
         if valid:
@@ -464,10 +342,10 @@ async def convert_to_compatible(
             logging.warning(f"Cached conversion invalid ({reason}), re-converting")
             os.remove(output_path)
 
-    # Determine if source is xHE-AAC / USAC — worth trying fdk first
+    # determine if xHE-AAC - worth trying fdk first
     is_usac = source_codec and source_codec.lower() in ('usac', 'aac')
 
-    # Build ordered list of decoder strategies to try
+    # build ordered decoder strategies to try
     strategies = []
     if is_usac and await has_fdk_aac():
         strategies.append(('libfdk_aac', 'libfdk_aac decoder (best quality)'))
@@ -477,7 +355,7 @@ async def convert_to_compatible(
     for decoder, label in strategies:
         logging.info(f"Conversion attempt: {label} for {os.path.basename(input_path)}")
 
-        # Clean up any partial output from previous attempt
+        # cleanup partial output from previous attempt
         if os.path.exists(output_path):
             os.remove(output_path)
 
@@ -494,7 +372,7 @@ async def convert_to_compatible(
             last_error = stderr_tail
             continue
 
-        # Validate the output
+        # validate the output
         valid, reason = await _validate_conversion(input_path, output_path, source_duration)
         if not valid:
             logging.warning(f"Strategy '{label}' produced invalid output: {reason}")
@@ -503,7 +381,7 @@ async def convert_to_compatible(
                 os.remove(output_path)
             continue
 
-        # Success — log and return
+        # success - log and return
         details = await probe_format_details(output_path)
         duration = details.get('duration')
         file_size = os.path.getsize(output_path)
@@ -513,45 +391,37 @@ async def convert_to_compatible(
         )
         return output_path, duration
 
-    # All strategies failed
+    # all strategies failed
     logging.error(f"All conversion strategies failed for {input_path}: {last_error}")
     if os.path.exists(output_path):
         os.remove(output_path)
     return None, None
 
 
-# ============================================================================
-# HIGH-LEVEL API
-# ============================================================================
-
+# high-level api - probe and convert if needed
 async def ensure_playable(file_path: str, temp_folder: str) -> Tuple[str, bool]:
     """
-    High-level helper: probe a file and convert if necessary.
-
-    Returns:
-        (playable_path, was_converted)
-
-    - If the codec is natively supported, returns the original path unchanged.
-    - If conversion is needed and succeeds, returns the converted path.
-    - If conversion fails, raises RuntimeError with diagnostic info.
+    high-level helper: probe file and convert if necessary.
+    
+    returns: (playable_path, was_converted)
+    native codec: returns original path unchanged
+    needs conversion: returns converted path or raises RuntimeError
     """
     codec = await probe_codec(file_path)
     logging.info(f"Codec probe: {file_path} → {codec or 'unknown'}")
 
-    # xHE-AAC detection: ffprobe reports these as plain 'aac' codec regardless
-    # of FFmpeg version.  Read the Audio Object Type from the MP4 container to
-    # catch USAC (AOT 42) that would otherwise slip through as native AAC.
+    # xHE-AAC detection: ffprobe may report as plain aac
+    # read audio object type from mp4 to catch usac (aot 42)
     force_convert = False
     if codec == 'aac' and _is_xhe_aac_file(file_path):
         logging.warning(
-            f"xHE-AAC (USAC) detected in {file_path} — forcing conversion"
+            f"xHE-AAC (USAC) detected in {file_path} forcing conversion"
         )
         force_convert = True
-        codec = 'usac'  # override so convert_to_compatible picks the right decoder
+        codec = 'usac'  # override for correct decoder selection
 
-    # mp4/webm containers may carry video streams or malformed stream metadata
-    # (e.g. "timescale not set") that cause FFmpegPCMAudio to fail even with -vn.
-    # Always extract to a clean audio file for these containers.
+    # mp4/webm may have video or malformed metadata
+    # always extract audio to clean file for these
     ext = os.path.splitext(file_path)[1].lower()
     if ext in ('.mp4', '.webm') and not force_convert:
         logging.info(f"Video container ({ext}), forcing audio extraction: {os.path.basename(file_path)}")
@@ -560,13 +430,13 @@ async def ensure_playable(file_path: str, temp_folder: str) -> Tuple[str, bool]:
     if not force_convert and not needs_conversion(codec):
         return file_path, False
 
-    # Get source details for validation and decoder selection
+    # get source details for validation and decoder selection
     details = await probe_format_details(file_path)
     codec_long = details.get('codec_long', codec or 'unknown')
     source_duration = details.get('duration', 0)
 
     logging.warning(
-        f"Incompatible codec detected: {codec_long} in {file_path} — converting"
+        f"Incompatible codec detected: {codec_long} in {file_path} converting"
     )
 
     converted_path, duration = await convert_to_compatible(

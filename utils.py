@@ -1,6 +1,6 @@
 """
-Utility classes for the music bot.
-Combines track management, UI, voice handling, permissions, and monitoring.
+utility classes for the music bot.
+combines track, ui, voice, permissions, and monitoring.
 """
 import discord
 from discord import app_commands
@@ -11,54 +11,48 @@ import logging
 from functools import wraps
 from typing import Set, Optional, List
 
-# ============================================================================
-# COLOR SCHEME
-# ============================================================================
+# color scheme for embeds
 class Colors:
-    """Color palette for embeds"""
-    PRIMARY = 0x3e4566    # Dark blue-gray - Main/Playing/Info
-    ACCENT = 0xff914d     # Orange - Success actions
-    WARNING = 0xffc300    # Amber - Warnings
-    ERROR = 0xf50b17      # Red - Errors only
+    """color palette for discord embeds"""
+    PRIMARY = 0x3e4566
+    ACCENT = 0xff914d
+    WARNING = 0xffc300
+    ERROR = 0xf50b17
 
 
-# ============================================================================
-# EMOJIS - Centralized emoji definitions
-# ============================================================================
+# centralized emoji definitions
 EMOJI = {
-    'play':       '▶',   # U+25B6  BLACK RIGHT-POINTING TRIANGLE
-    'pause':      '‖',   # U+2016  DOUBLE VERTICAL LINE
+    'play':       '▶',
+    'pause':      '‖',
     'resume':     '▶',
-    'stop':       '■',   # U+25A0  BLACK SQUARE
+    'stop':       '■',
     'skip':       '▶▶',
-    'queue':      '≡',   # U+2261  IDENTICAL TO (triple bar)
-    'music':      '♪',   # U+266A  EIGHTH NOTE
-    'warning':    '▲',   # U+25B2  BLACK UP-POINTING TRIANGLE
-    'error':      '✕',   # U+2715  MULTIPLICATION X
-    'success':    '✓',   # U+2713  CHECK MARK
-    'time':       '◷',   # U+25F7  WHITE CIRCLE WITH UPPER RIGHT QUADRANT
-    'loop':       '↻',   # U+21BB  CLOCKWISE OPEN CIRCLE ARROW
-    'volume':     '◆',   # U+25C6  BLACK DIAMOND
-    'mute':       '◇',   # U+25C7  WHITE DIAMOND
-    'disconnect': '←',   # U+2190  LEFTWARDS ARROW
-    'loading':    '…',   # U+2026  HORIZONTAL ELLIPSIS
-    'microphone': '◎',   # U+25CE  BULLSEYE
+    'queue':      '≡',
+    'music':      '♪',
+    'warning':    '▲',
+    'error':      '✕',
+    'success':    '✓',
+    'time':       '◷',
+    'loop':       '↻',
+    'volume':     '◆',
+    'mute':       '◇',
+    'disconnect': '←',
+    'loading':    '…',
+    'microphone': '◎',
     'cd':         '◆',
-    'settings':   '◈',   # U+25C8  WHITE DIAMOND CONTAINING BLACK SMALL DIAMOND
-    'user':       '●',   # U+25CF  BLACK CIRCLE
-    'role':       '○',   # U+25CB  WHITE CIRCLE
-    'info':       '·',   # U+00B7  MIDDLE DOT
-    'fast':       '»',   # U+00BB  RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
-    'slow':       '«',   # U+00AB  LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
-    'bar':        '━',   # U+2501  BOX DRAWINGS HEAVY HORIZONTAL
+    'settings':   '◈',
+    'user':       '●',
+    'role':       '○',
+    'info':       '·',
+    'fast':       '»',
+    'slow':       '«',
+    'bar':        '━',
 }
 
 
-# ============================================================================
-# UI HELPERS
-# ============================================================================
+# ui helpers - embed creation and formatting
 def create_embed(title: str = None, description: str = None, color: int = None) -> discord.Embed:
-    """Create a consistent embed with cleaner styling"""
+    """create consistent embed with standard styling"""
     if color is None:
         color = Colors.PRIMARY
     
@@ -76,7 +70,7 @@ def create_embed(title: str = None, description: str = None, color: int = None) 
 
 
 def format_duration(seconds: float) -> str:
-    """Format seconds as MM:SS or HH:MM:SS"""
+    """format seconds as mm:ss or hh:mm:ss"""
     seconds = int(seconds)
     if seconds < 3600:
         return f"{seconds // 60:02d}:{seconds % 60:02d}"
@@ -84,7 +78,7 @@ def format_duration(seconds: float) -> str:
 
 
 def progress_bar(position: float, duration: float, length: int = 15) -> str:
-    """Create a visual progress bar with better styling"""
+    """create visual progress bar for playback"""
     if duration <= 0:
         return f"`{EMOJI['bar'] * length}`"
     
@@ -97,8 +91,9 @@ def progress_bar(position: float, duration: float, length: int = 15) -> str:
     return f"`{bar}`"
 
 
+# quick embed helpers for common messages
 def error_embed(message: str, title: str = "Error") -> discord.Embed:
-    """Quick error embed with red color"""
+    """quick error embed with red color"""
     embed = create_embed(color=Colors.ERROR)
     embed.title = f"{EMOJI['error']} {title}"
     embed.description = message
@@ -106,7 +101,7 @@ def error_embed(message: str, title: str = "Error") -> discord.Embed:
 
 
 def warning_embed(message: str, title: str = "Warning") -> discord.Embed:
-    """Quick warning embed with amber color"""
+    """quick warning embed with amber color"""
     embed = create_embed(color=Colors.WARNING)
     embed.title = f"{EMOJI['warning']} {title}"
     embed.description = message
@@ -114,7 +109,7 @@ def warning_embed(message: str, title: str = "Warning") -> discord.Embed:
 
 
 def success_embed(title: str, message: str) -> discord.Embed:
-    """Quick success/action embed with orange color"""
+    """quick success embed with orange color"""
     embed = create_embed(color=Colors.ACCENT)
     embed.title = f"{EMOJI['success']} {title}"
     embed.description = message
@@ -122,28 +117,26 @@ def success_embed(title: str, message: str) -> discord.Embed:
 
 
 def info_embed(title: str, message: str) -> discord.Embed:
-    """Quick info embed with primary color"""
+    """quick info embed with primary color"""
     embed = create_embed(color=Colors.PRIMARY)
     embed.title = title
     embed.description = message
     return embed
 
 
-# ============================================================================
-# PERMISSION DECORATORS
-# ============================================================================
+# permission decorators - blacklist, role, admin
 def check_permissions():
-    """Check if user can use the bot (not blacklisted, has required role)"""
+    """check if user can use bot (not blacklisted, required role)"""
     async def predicate(interaction: discord.Interaction) -> bool:
         music_cog = interaction.client.get_cog('Music')
         if not music_cog:
             return False
         
-        # Admins bypass all checks
+        # admins bypass all permission checks
         if interaction.user.guild_permissions.administrator:
             return True
         
-        # Check blacklist
+        # check blacklist first
         if music_cog.db.is_blacklisted(interaction.guild_id, interaction.user.id):
             await interaction.response.send_message(
                 embed=error_embed("You are blacklisted from using this bot."),
@@ -151,7 +144,7 @@ def check_permissions():
             )
             return False
         
-        # Check role whitelist
+        # check role whitelist if configured
         whitelisted = music_cog.db.get_whitelisted_roles(interaction.guild_id)
         if whitelisted:
             user_roles = {r.id for r in interaction.user.roles}
@@ -167,7 +160,7 @@ def check_permissions():
 
 
 def admin_only():
-    """Require administrator permissions"""
+    """require administrator permissions to use"""
     async def predicate(interaction: discord.Interaction) -> bool:
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message(
@@ -180,7 +173,7 @@ def admin_only():
 
 
 def safe_defer(func):
-    """Decorator to safely defer interactions and handle errors"""
+    """safely defer interactions and handle errors"""
     @wraps(func)
     async def wrapper(self, interaction: discord.Interaction, *args, **kwargs):
         try:
@@ -204,11 +197,9 @@ def safe_defer(func):
     return wrapper
 
 
-# ============================================================================
-# TRACK MANAGER
-# ============================================================================
+# track manager - downloads, cleanup, queue limits
 class TrackManager:
-    """Manages audio file downloads, cleanup, and resource limits"""
+    """manages audio files, cleanup, and resource limits"""
     
     def __init__(self, config: dict):
         self.temp_folder = config['temp_folder']
@@ -224,27 +215,31 @@ class TrackManager:
         os.makedirs(self.temp_folder, exist_ok=True)
     
     def mark_active(self, path: str):
+        """mark file as actively used"""
         if path:
             self._active_files.add(path)
     
     def mark_inactive(self, path: str):
+        """mark file as no longer in use"""
         if path:
             self._active_files.discard(path)
     
     def get_queue_size(self, queue: list) -> int:
+        """total bytes of all queue files"""
         return sum(t.file_size for t in queue)
     
     def can_add(self, queue: list, file_size: int) -> bool:
-        """Check if file can be added to queue"""
+        """check if file can be added to queue"""
         if self.get_queue_size(queue) + file_size > self.max_queue_size:
             return False
         return len(queue) < self.max_tracks
     
     def validate_duration(self, duration: float) -> bool:
+        """check if duration within limits"""
         return duration <= self.max_duration
     
     async def cleanup_temp_files(self):
-        """Remove old temporary files"""
+        """remove old temporary files by age"""
         now = time.time()
         if now - self._last_cleanup < self.cleanup_interval:
             return
@@ -271,7 +266,7 @@ class TrackManager:
             logging.info(f"Cleaned up {cleaned} temp files")
     
     async def ensure_temp_folder(self):
-        """Ensure temp folder exists and is writable"""
+        """check temp folder exists and is writable"""
         os.makedirs(self.temp_folder, exist_ok=True)
         test_file = os.path.join(self.temp_folder, '.write_test')
         try:
@@ -283,21 +278,19 @@ class TrackManager:
             raise
 
 
-# ============================================================================
-# VOICE CONNECTION HANDLER
-# ============================================================================
+# voice handler - connections, retries
 class VoiceHandler:
-    """Handles voice connections with retry logic"""
+    """handles voice connections with retry logic"""
     
     def __init__(self):
         self.last_attempt: dict = {}
         self.failure_count: dict = {}
     
     async def connect(self, channel: discord.VoiceChannel, max_retries: int = 3) -> Optional[discord.VoiceClient]:
-        """Connect to voice channel with retries"""
+        """connect to voice channel with exponential backoff"""
         guild_id = channel.guild.id
         
-        # Rate limit check
+        # rate limit check - prevent rapid reconnect attempts
         now = time.time()
         if guild_id in self.last_attempt and now - self.last_attempt[guild_id] < 30:
             logging.warning(f"Voice connection rate limited for guild {guild_id}")
@@ -307,30 +300,32 @@ class VoiceHandler:
         
         for attempt in range(max_retries):
             try:
-                # Disconnect existing connection
+                # disconnect existing connection first
                 if channel.guild.voice_client:
                     await channel.guild.voice_client.disconnect(force=True)
                     await asyncio.sleep(1)
                 
-                # Check permissions
+                # verify bot has voice permissions
                 perms = channel.permissions_for(channel.guild.me)
                 if not perms.connect or not perms.speak:
                     logging.error(f"Missing voice permissions in {channel.name}")
                     return None
                 
-                # Connect
+                # connect with timeout
                 voice_client = await channel.connect(timeout=30.0, reconnect=False)
                 self.failure_count.pop(guild_id, None)
                 logging.info(f"Connected to voice: {channel.name}")
                 return voice_client
                 
             except discord.errors.ConnectionClosed as e:
+                # retry on session invalidation
                 if e.code == 4006:
                     logging.warning(f"Session invalidated, retrying... (attempt {attempt + 1})")
                     await asyncio.sleep(2 ** attempt)
                     continue
                 break
             except discord.ClientException as e:
+                # already connected - use existing
                 if "already connected" in str(e).lower():
                     return channel.guild.voice_client
                 break
@@ -347,18 +342,16 @@ class VoiceHandler:
         return None
 
 
-# ============================================================================
-# HEALTH MONITOR
-# ============================================================================
+# health monitor - track failures, uptime
 class HealthMonitor:
-    """Simple health monitoring for the bot"""
+    """simple health monitoring for the bot"""
     
     def __init__(self, bot):
         self.bot = bot
         self.voice_failures: dict = {}
     
     def log_failure(self, guild_id: int, error_code: int):
-        """Log a voice connection failure"""
+        """log a voice connection failure with code"""
         if guild_id not in self.voice_failures:
             self.voice_failures[guild_id] = []
         
@@ -367,14 +360,15 @@ class HealthMonitor:
             'code': error_code
         })
         
-        # Keep only last 10
+        # keep only last 10 failures per guild
         self.voice_failures[guild_id] = self.voice_failures[guild_id][-10:]
     
     async def get_stats(self) -> dict:
-        """Get bot health statistics"""
+        """get current bot health statistics"""
         connected = len([g for g in self.bot.guilds if g.voice_client])
         uptime = (time.time() - self.bot.start_time) / 3600 if hasattr(self.bot, 'start_time') else 0
         
+        # count failures in last hour
         recent_failures = sum(
             len([f for f in fails if time.time() - f['time'] < 3600])
             for fails in self.voice_failures.values()
@@ -388,7 +382,7 @@ class HealthMonitor:
         }
     
     async def monitor_loop(self):
-        """Background task to monitor voice connections"""
+        """background task to monitor voice health"""
         while True:
             try:
                 for guild in self.bot.guilds:

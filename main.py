@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from music import Music
 
-# Set up logging
+# logging setup
 def setup_logging():
     if not os.path.exists('logs'):
         os.makedirs('logs')
@@ -25,18 +25,18 @@ def setup_logging():
 
 class SporkMP3(commands.AutoShardedBot):
     def __init__(self):
-        # Set up minimal intents
+        # minimal intents for required operations
         intents = discord.Intents.none()
-        intents.guilds = True  # Needed for basic guild operations
-        intents.voice_states = True  # Needed for voice functionality
-        intents.guild_messages = True  # Needed for message handling
+        intents.guilds = True
+        intents.voice_states = True
+        intents.guild_messages = True
         
         super().__init__(command_prefix="!", intents=intents)
         
-        # Store startup time for health monitoring
+        # track startup for health monitoring
         self.start_time = time.time()
         
-        # Load config
+        # load config or raise
         try:
             with open('config.json', 'r') as f:
                 self.config = json.load(f)
@@ -49,10 +49,10 @@ class SporkMP3(commands.AutoShardedBot):
 
     async def setup_hook(self):
         try:
-            # Add the music cog
+            # add music cog to bot
             await self.add_cog(Music(self))
             
-            # Run file validation on startup
+            # run file validation at startup
             music_cog = self.get_cog('Music')
             if music_cog:
                 logging.info("Running startup file validation...")
@@ -62,7 +62,7 @@ class SporkMP3(commands.AutoShardedBot):
                 else:
                     logging.info("Startup validation completed: All files valid")
             
-            # Sync commands
+            # sync app commands with discord
             await self.tree.sync()
             logging.info("Command tree synced successfully")
             
@@ -74,12 +74,12 @@ class SporkMP3(commands.AutoShardedBot):
         logging.info(f'{self.user} is ready!')
         logging.info(f'Serving in {len(self.guilds)} servers')
         
-        # Set the bot's activity status
+        # set activity status
         activity = discord.Game(name="your audio files")
         await self.change_presence(activity=activity)
         logging.info("Set activity status to 'Playing your audio files'")
         
-        # Log startup completion time
+        # log startup time
         startup_time = time.time() - self.start_time
         logging.info(f"Bot startup completed in {startup_time:.2f} seconds")
 
@@ -92,32 +92,29 @@ class SporkMP3(commands.AutoShardedBot):
         logging.error(f'Command error: {error}')
 
     async def on_voice_state_update(self, member, before, after):
-        """Handle voice state updates for voice connection monitoring"""
-        # This will be handled by the music cog, but we can add additional monitoring here
+        # handled by music cog with additional monitoring
         pass
 
     async def on_guild_join(self, guild):
-        """Log when bot joins a new guild"""
         logging.info(f"Joined new guild: {guild.name} (ID: {guild.id}) with {guild.member_count} members")
 
     async def on_guild_remove(self, guild):
-        """Log when bot leaves a guild and clean up"""
         logging.info(f"Left guild: {guild.name} (ID: {guild.id})")
         
-        # Clean up guild data
+        # cleanup guild data and state
         try:
             music_cog = self.get_cog('Music')
             if music_cog:
-                # Clean up guild state
+                # cleanup guild state
                 if guild.id in music_cog.state.guild_states:
                     guild_state = music_cog.state.guild_states[guild.id]
 
-                    # Mark all files as inactive and clean up non-permanent tracks
+                    # mark files inactive and cleanup
                     for track in guild_state.queue:
                         if not track.is_permanent:
                             track.cleanup()
 
-                    # Remove guild state
+                    # remove guild state entirely
                     del music_cog.state.guild_states[guild.id]
                     
                     logging.info(f"Cleaned up state for guild {guild.id}")
@@ -125,14 +122,13 @@ class SporkMP3(commands.AutoShardedBot):
             logging.error(f"Error cleaning up guild {guild.id}: {e}")
 
 def main():
-    # Pin CWD to the directory this script lives in so all relative paths
-    # (bot_settings.db, permanent/, temp/, logs/) are stable across restarts
+    # pin cwd to script location for stable relative paths
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     setup_logging()
     logging.info("Starting SporkMP3 bot...")
     
-    # Create required directories
+    # create required directories
     try:
         with open('config.json', 'r') as f:
             config = json.load(f)
@@ -143,10 +139,10 @@ def main():
                 os.makedirs(directory)
                 logging.info(f"Created directory: {directory}")
     
-        # Initialize and run bot
+        # initialize and run bot
         bot = SporkMP3()
         
-        # Add error handling for the main run loop
+        # handle main run loop errors
         try:
             bot.run(config['token'])
         except discord.LoginFailure:
